@@ -1,4 +1,4 @@
-# MemeGraph — The Living Receipt
+# MemeGraph — The Replay Booth
 
 A private-demo, human-first interface for MemeGraph.
 

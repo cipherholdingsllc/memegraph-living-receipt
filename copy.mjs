@@ -451,11 +451,88 @@ export const MISC = {
 
 // Short criteria line printed on the call card: "10 join · 3 come back · 30 days" (section 4).
 // Numbers come from call.falsification_criteria; never hardcoded.
-export function criteriaShort(c) {
+export function criteriaShort(c, { window = true } = {}) {
   if (!c) return "";
   const parts = [];
   if (c.minimum_unique_participants != null) parts.push(`${c.minimum_unique_participants} join`);
   if (c.minimum_repeat_participants != null) parts.push(`${c.minimum_repeat_participants} come back`);
-  if (c.minimum_observation_days != null) parts.push(`${c.minimum_observation_days} days`);
+  // drop the day window when the preceding copy already says "within N days"
+  if (window && c.minimum_observation_days != null) parts.push(`${c.minimum_observation_days} days`);
   return parts.join(" · ");
 }
+
+/* ---------- THE REPLAY BOOTH (spec section 9, verbatim) ---------- */
+
+export const REPLAY = {
+  play: "Instant Replay",
+  pause: "Pause",
+  rewind: "Rewind",
+  step: "Step",
+  why: "Why did it move?",
+  share: "Share replay",
+  kinds: {
+    "watcher-report": "A watcher reported",
+    "signal-fit": "Fit our thinking",
+    "signal-against": "Argued against it",
+    "unknown-noted": "We couldn't know this",
+    contradiction: "Evidence against it",
+    "theory-formed": "Our theory",
+    "theory-replaced": "Theory replaced",
+    "no-peek-set": "Set aside a no-peek test",
+    "call-locked": "Call locked",
+    reality: "Reality arrived",
+    "chapter-closed": "Chapter closed",
+  },
+  lockLine: "Nothing after this line can change the call.",
+  whyTitle: "What changed",
+  plain: "In plain words",
+  confidence: "Confidence: we didn't put a number on it",
+};
+
+export const HOME = {
+  predict: "What are we trying to predict?",
+  call: "Our call",
+  why: "Why?",
+  fit: (n) => `${n} ${n === 1 ? "thing" : "things"} that fit`,
+  against: (n) => `${n} ${n === 1 ? "thing" : "things"} that argued against`,
+  unknown: (n) => `${n} ${n === 1 ? "thing" : "things"} we couldn't know`,
+  changeMind: "Biggest thing that could change our mind",
+};
+
+export const MODES = {
+  demo: "DEMO · made-up example",
+  live: "LIVE",
+  replay: "REPLAY",
+  liveSealed:
+    "Live experiment running. Its calls, arms and outcomes are sealed until the protocol says otherwise. Nothing here is live.",
+  replayEmpty:
+    "No resolved real calls yet. When one resolves it will replay here from its own event log.",
+};
+
+export const WATCHERS = {
+  title: "Watchers",
+  sub: "Each watcher is one piece of real evidence work. No mascots.",
+  cols: ["Mission", "What it checked", "What it found", "What changed", "Receipt"],
+};
+
+export const EPOCH = {
+  title: "This chapter",
+  sub: "Every 14 days we close the book and count.",
+  notTracked: "not tracked in this example",
+};
+
+export const GLASS = {
+  title: "Economic constitution v1",
+  badge: "DRAFT · PRE-LAUNCH",
+  q: "How does Nate make money?",
+  a: "Creator fees. Not hidden token sales.",
+  none: "— (nothing yet)",
+  footer: "No money has moved. This is a draft policy for review, not a contract.",
+  founder:
+    "If a founder holds a personal position it is disclosed, capped, locked, vested on a fixed schedule, and never counted as project revenue.",
+};
+
+export const SHARE = {
+  closerResolved: "Reality arrived. MemeGraph kept the original call.",
+  closerWaiting: "Still waiting. The call can't move.",
+};

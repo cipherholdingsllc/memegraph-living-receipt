@@ -1,13 +1,18 @@
-// MemeGraph — The Living Receipt. Story-first renderer over the frozen weave.
+// MemeGraph — The Replay Booth. Instant-replay renderer over the frozen weave.
 // All human-facing strings come from copy.mjs; all positions from
-// model.storyLayout. DOM record elements carry data-node-id / data-edge-id /
-// data-rel and mirror the native frame exactly - never fabricated.
+// model.storyLayout; the event tape from replay.mjs. DOM record elements carry
+// data-node-id / data-edge-id / data-rel and mirror the native frame exactly -
+// never fabricated.
 import {
   getFrame, findNode, traceUpstream, traceDownstream, diffFrames,
   storyLayout, storyLanes, storyColumnX, STORY_GEO, portraitGeometry, portraitColX,
   nodeInspector, exportReceipt, timingOf, familyOf, TRACE_RELS,
 } from "./model.mjs";
 import * as C from "./copy.mjs";
+import {
+  eventsFromWeave, stateAt, eventTime, boothDay, replayElapsed,
+  lastEventOfFrame, epochStats,
+} from "./replay.mjs";
 
 const NS = "http://www.w3.org/2000/svg";
 const $ = (id) => document.getElementById(id);
@@ -32,7 +37,7 @@ const S = {
   pos: new Map(),
   focus: null, // "why" | "against"
   selected: null,
-  panelMode: null, // "node" | "receipt" | "share"
+  panelMode: null, // "node" | "receipt" | "share" | "recap" | "why" | "expert"
   playing: null,
   playedOnce: false,
   expert: sessionStorage.getItem("mg2.expert") === "1",
@@ -43,6 +48,12 @@ const S = {
   pinch: null,
   geo: null,
   userZoom: false,
+  // replay booth
+  events: [],
+  cursor: -1,      // index into S.events; -1 = before the tape
+  replayT: null,   // ms cutoff for the field (events[k].t)
+  speed: 1,
+  mode: "demo",    // "demo" | "live" | "replay"
 };
 
 /* ---------- small helpers ---------- */
@@ -407,7 +418,9 @@ function drawZones(layer, frame, port) {
       const lab = svgEl("text", { x: geo.left + 26, y: geo.sealY - 8, class: "kicker seal-label" });
       lab.textContent = C.FIELD.sealLabel;
       seal.append(lab);
-      const aft = svgEl("text", { x: geo.w - 10, y: geo.sealY + 20, "text-anchor": "end", class: "zone-label" });
+      // after-label sits ABOVE the line at the right end — below the line the
+      // full-width call card starts 22px down and would collide with it
+      const aft = svgEl("text", { x: geo.w - 10, y: geo.sealY - 8, "text-anchor": "end", class: "zone-label" });
       aft.textContent = C.FIELD.afterLabel;
       seal.append(aft);
       layer.append(seal);
@@ -602,10 +615,16 @@ function renderFrame() {
     zone: $("zone-layer"), rails: $("rails-layer"), edges: $("edges-layer"),
     nodes: $("nodes-layer"), annot: $("annot-layer"),
   };
-  // outgoing elements get an exit animation, then are removed entirely
-  const removedIds = new Set([...S.prevIds].filter((id) => !(frame?.nodes ?? []).some((n) => n.id === id)));
   for (const layer of Object.values(layers)) layer.textContent = "";
   if (!frame) return;
+  // replay cursor: the stage shows only records whose known-to-us time has
+  // passed the cursor's t. Chapter stops park the cursor on a frame's last
+  // event, which reproduces frame membership exactly.
+  const T = S.replayT;
+  const nodeOk = (n) => T == null || (eventTime(n) ?? Infinity) <= T;
+  const visIds = new Set((frame.nodes ?? []).filter(nodeOk).map((n) => n.id));
+  // outgoing elements get an exit animation, then are removed entirely
+  const removedIds = new Set([...S.prevIds].filter((id) => !visIds.has(id)));
   S.geo = port ? portraitGeometry(frame, { expert: S.expert }) : STORY_GEO.landscape;
   S.pos = storyLayout(frame, { portrait: port, expert: S.expert });
   $("graph").classList.toggle("portrait", port);
@@ -619,10 +638,11 @@ function renderFrame() {
   drawAxis(layers.zone, frame, port);
   drawRails(layers.rails, frame, port);
 
-  const entering = new Set([...frame.nodes.map((n) => n.id)].filter((id) => S.prevIds.size && !S.prevIds.has(id)));
+  const entering = new Set([...visIds].filter((id) => S.prevIds.size && !S.prevIds.has(id)));
   const prevEdgeIds = S.prevEdgeIds ?? new Set();
 
   for (const e of frame.edges ?? []) {
+    if (!visIds.has(e.src) || !visIds.has(e.dst)) continue;
     const d = edgePath(e, port);
     if (!d) continue;
     const dst = findNode(frame, e.dst);
@@ -657,6 +677,7 @@ function renderFrame() {
     (a.kind === "entity" && /experiment/.test(a.label ?? "") ? 1 : 0) -
     (b.kind === "entity" && /experiment/.test(b.label ?? "") ? 1 : 0));
   for (const n of drawOrder) {
+    if (!visIds.has(n.id)) continue;
     const p = S.pos.get(n.id);
     if (!p) continue;
     const stance = C.stanceOf(n, frame);
@@ -690,10 +711,10 @@ function renderFrame() {
 
   drawUnknowns(layers.annot, frame, port);
   drawWaiting(layers.annot, frame, port);
-  if (port) drawChapterStack();
+  drawChapterStack();
 
-  S.prevIds = new Set(frame.nodes.map((n) => n.id));
-  S.prevEdgeIds = new Set(frame.edges.map((e) => e.id));
+  S.prevIds = visIds;
+  S.prevEdgeIds = new Set(frame.edges.filter((e) => visIds.has(e.src) && visIds.has(e.dst)).map((e) => e.id));
   updateRail();
   applyFocusClasses();
 }
@@ -761,16 +782,16 @@ function updateRail() {
     const dx = r.left < 8 ? 8 - r.left : (r.right > innerWidth - 8 ? innerWidth - 8 - r.right : 0);
     if (dx) sd.style.transform = `translateX(${dx}px)`;
   }
-  for (const id of ["btn-share", "btn-share-hero"]) {
-    const b = $(id);
-    if (!b) continue;
+  {
+    const b = $("btn-share");
     b.disabled = !frame.call;
     b.title = frame.call ? "" : C.MISC.noCallYet;
   }
   // play label: "Play it again" only after a playthrough completed this session
+  const atEnd = S.cursor >= S.events.length - 1;
   const label = rm
-    ? (S.playedOnce && S.frameIndex >= 6 ? C.ACTIONS.replay : C.ACTIONS.next)
-    : (S.playedOnce && S.frameIndex >= 6 ? C.ACTIONS.replay : C.ACTIONS.play);
+    ? (S.playedOnce && atEnd ? C.ACTIONS.replay : C.ACTIONS.next)
+    : (S.playedOnce && atEnd ? C.ACTIONS.replay : C.REPLAY.play);
   for (const id of ["btn-play", "btn-play-hero"]) {
     const pb = $(id);
     if (!pb || S.playing) continue;
@@ -786,12 +807,10 @@ function setFocus(mode) {
   S.focus = S.focus === mode ? null : mode;
   pausePlay();
   applyFocusClasses();
-  for (const [id, m] of [["btn-why", "why"], ["btn-why-hero", "why"], ["btn-against", "against"], ["btn-against-hero", "against"]]) {
+  for (const [id, m] of [["btn-why", "why"], ["btn-against", "against"]]) {
     $(id)?.setAttribute("aria-pressed", String(S.focus === m));
   }
   $("btn-clearfocus").hidden = !S.focus;
-  const hf = $("btn-clearfocus-hero");
-  if (hf) hf.hidden = !S.focus;
   updateRail(); // restores or sets the now-line under focus
 }
 
@@ -861,6 +880,7 @@ function openPanel(mode, id) {
   else if (mode === "receipt") renderReceiptPanel(body);
   else if (mode === "share") renderSharePanel(body);
   else if (mode === "expert") renderExpertPanel(body);
+  else if (mode === "why") renderWhyPanel(body);
   $("inspector").hidden = false;
 }
 
@@ -1150,16 +1170,112 @@ async function renderSharePanel(body) {
   }
 }
 
-async function shareToPNG(svgText) {
+async function shareToPNG(svgText, w = 1080, h = 1350) {
   const img = new Image();
   const blob = new Blob([svgText], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
   const canvas = document.createElement("canvas");
-  canvas.width = 1080; canvas.height = 1350;
-  canvas.getContext("2d").drawImage(img, 0, 0, 1080, 1350);
+  canvas.width = w; canvas.height = h;
+  canvas.getContext("2d").drawImage(img, 0, 0, w, h);
   URL.revokeObjectURL(url);
   return canvas.toDataURL("image/png");
+}
+
+/* ---------- replay recap export (9:16 / 1:1 / 16:9) ---------- */
+
+const RECAP_FMTS = { "9x16": [1080, 1920], "1x1": [1080, 1080], "16x9": [1920, 1080] };
+
+// Recap content always reflects the current cursor: before the outcome event
+// the recap is the WAITING variant (panel 5 shows the test we set, panel 6 is
+// omitted - the lesson is outcome information); after, the resolved closer.
+// Layout = 6-PANEL RECAP (spec §7): THE CALL · WHAT WE KNEW · WHAT WORRIED US ·
+// THE LOCK · REALITY · WHAT WE LEARNED. Paper panels on the booth ground;
+// bodies are verbatim fixture/copy substrings, <=2 lines, >=28px at 1080 wide.
+function recapSVG(fmt) {
+  const [W, H] = RECAP_FMTS[fmt] ?? RECAP_FMTS["9x16"];
+  const frame = getFrame(S.data, 6);
+  const call = frame?.call ?? {};
+  const st = stateAt(S.events, S.cursor);
+  const waiting = !st.result;
+  const resLines = waiting ? [] : C.RESULT.lines(frame.outcome, call);
+  // Panel bodies carry the real evidence text: up to 3 fit / against captions
+  // from the tape, the criteria line on the lock panel, both result lines under
+  // the stamp word, the full lesson when resolved.
+  const capsFor = (kind, nMax) =>
+    S.events.slice(0, S.cursor + 1).filter((e) => e.kind === kind)
+      .map((e) => findNode(frame, e.nodeId)).filter(Boolean)
+      .map((n) => C.shortCaption(n, frame)).slice(-nMax);
+  const fitCaps = capsFor("signal-fit", 3);
+  const agCaps = capsFor("signal-against", 3);
+  const critLine = `${C.CALL_CARD.criteriaTitle} ${C.criteriaShort(call.falsification_criteria, { window: false })}`;
+  const panels = [
+    { k: "THE CALL", body: [C.CALL_CARD.human], fill: "#1a1a17", serif: true, wide: true },
+    { k: "WHAT WE KNEW", body: fitCaps.length ? fitCaps : [C.HOME.fit(st.fit)], fill: "#c9971f" },
+    { k: "WHAT WORRIED US", body: agCaps.length ? agCaps : [C.HOME.against(st.against)], fill: "#d9452a" },
+    { k: "THE LOCK", body: [`${C.CALL_CARD.lockedLabel(C.humanDate(call.created_at, true))}. ${C.REPLAY.lockLine}`, critLine], fill: "#1a1a17" },
+    waiting
+      ? { k: "REALITY", body: [`${C.RESULT.stamp.unresolved} — ${C.SHARE_CARD.willCountLine(call.falsification_criteria)}`], fill: "#5b6b66" }
+      : { k: "REALITY", body: [C.RESULT.stamp.resolved_miss, ...resLines], fill: "#9e1f1a" },
+  ];
+  if (!waiting) {
+    panels.push({ k: "WHAT WE LEARNED", body: [C.LESSON.plain], fill: "#1a1a17" });
+  }
+  const parts = [];
+  parts.push(`<rect width="${W}" height="${H}" fill="#0a1210"/>`);
+  // header band: wordmark + required mode badge
+  parts.push(`<text x="60" y="86" font-family="Newsreader,Georgia,serif" font-weight="600" font-size="44" fill="#f4ecd8">${esc(C.BRAND.name)}</text>`);
+  parts.push(`<text x="${W - 60}" y="82" text-anchor="end" font-family="'IBM Plex Mono',monospace" font-size="22" fill="rgba(244,236,216,0.7)">${esc(C.MODES.demo)}</text>`);
+  const M = 60, G = 24;
+  const top = 130;
+  const innerW = W - 2 * M;
+  // panels size to content: kicker + wrapped body lines + padding
+  const drawPanel = (p, x, y, w) => {
+    const fs = p.serif ? 30 : 28, lh = fs + 8;
+    const cpl = Math.max(12, Math.floor((w - 56) / (fs * 0.52)));
+    const lines = p.body.flatMap((b) => wrapWords(b, cpl));
+    const h = 60 + lines.length * lh + 26;
+    parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="#f4ecd8"/>`);
+    parts.push(`<rect x="${x + 10}" y="${y + 10}" width="${w - 20}" height="${h - 20}" rx="5" fill="none" stroke="rgba(26,26,23,0.55)" stroke-width="1.5"/>`);
+    parts.push(`<text x="${x + 28}" y="${y + 52}" font-family="Newsreader,Georgia,serif" font-weight="700" font-size="26" letter-spacing="3" fill="rgba(26,26,23,0.6)">${esc(p.k)}</text>`);
+    parts.push(svgTextLines(lines, x + 28, y + 60 + lh, lh,
+      `font-family="${p.serif ? "Newsreader,Georgia,serif" : "'Atkinson Hyperlegible',sans-serif"}" ${p.serif ? 'font-style="italic" ' : ""}font-size="${fs}" fill="${p.fill}"`));
+    return h;
+  };
+  // tile the rest: stacked rows for 9:16, two rows for 1:1, one row for 16:9
+  const rest = panels.slice(1);
+  const rows = fmt === "9x16" ? rest.map((p) => [p]) : fmt === "16x9" ? [rest] : [rest.slice(0, 3), rest.slice(3)];
+  let y = top + drawPanel(panels[0], M, top, innerW) + G;
+  for (const row of rows) {
+    const cw = (innerW - G * (row.length - 1)) / row.length;
+    let rowH = 0;
+    row.forEach((p, i) => { rowH = Math.max(rowH, drawPanel(p, M + i * (cw + G), y, cw)); });
+    y += rowH + G;
+  }
+  parts.push(`<text x="60" y="${H - 56}" font-family="'Atkinson Hyperlegible',sans-serif" font-weight="700" font-size="24" letter-spacing="5" fill="#efe6d2">${esc(waiting ? C.SHARE.closerWaiting : C.SHARE.closerResolved)}</text>`);
+  parts.push(`<text x="${W - 60}" y="${H - 56}" text-anchor="end" font-family="'IBM Plex Mono',monospace" font-size="16" fill="rgba(239,230,210,0.62)">${esc(fpShort(call.prediction_hash))}</text>`);
+  return `<svg xmlns="${NS}" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${parts.join("")}</svg>`;
+}
+
+async function exportRecap(fmt) {
+  const [w, h] = RECAP_FMTS[fmt] ?? RECAP_FMTS["9x16"];
+  const url = await shareToPNG(recapSVG(fmt), w, h);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `memegraph-replay-${fmt}.png`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function openRecapModal(fmt = "9x16") {
+  pausePlay();
+  const modal = $("recap-modal");
+  modal.hidden = false;
+  const prev = $("recap-preview");
+  prev.innerHTML = recapSVG(fmt);
+  for (const b of modal.querySelectorAll(".recap-fmt")) {
+    b.setAttribute("aria-pressed", String(b.dataset.fmt === fmt));
+  }
 }
 
 /* ---------- zoom ---------- */
@@ -1194,45 +1310,367 @@ function pausePlay() {
 }
 function togglePlay() {
   if (rm) {
-    if (S.frameIndex >= 6) setFrame(0);
-    else setFrame(S.frameIndex + 1);
-    if (S.frameIndex >= 6) S.playedOnce = true;
+    if (S.cursor >= S.events.length - 1) cursorTo(0);
+    else cursorTo(S.cursor + 1);
+    if (S.cursor >= S.events.length - 1) S.playedOnce = true;
     updateRail();
     return;
   }
   if (S.playing) { pausePlay(); return; }
   S.playing = setInterval(() => {
-    if (S.frameIndex >= 6) { S.playedOnce = true; pausePlay(); return; }
-    setFrame(S.frameIndex + 1);
-  }, 2400);
-  if (S.frameIndex >= 6) setFrame(0);
+    if (S.cursor >= S.events.length - 1) { S.playedOnce = true; pausePlay(); return; }
+    cursorTo(S.cursor + 1);
+  }, 900 / S.speed);
+  if (S.cursor >= S.events.length - 1) cursorTo(0);
   for (const id of ["btn-play", "btn-play-hero"]) {
     const pb = $(id);
-    if (pb) { pb.innerHTML = ""; pb.append(el("span", "tri", "◼"), el("span", "lbl", C.ACTIONS.pause)); }
+    if (pb) { pb.innerHTML = ""; pb.append(el("span", "tri", "◼"), el("span", "lbl", C.REPLAY.pause)); }
   }
 }
 
-/* ---------- frame switching ---------- */
+/* ---------- replay cursor ---------- */
 
-function setFrame(i) {
-  const next = getFrame(S.data, i);
-  if (!next || i === S.frameIndex) {
-    if (i === S.frameIndex) updateRail();
-    return;
-  }
-  S.lastDir = i < S.frameIndex ? "back" : "fwd";
-  S.frameIndex = i;
+// The event tape drives everything: field visibility is the set of records
+// with known-to-us time <= events[cursor].t; the chapter rail, now-line and
+// inspector follow the event's frame.
+function cursorTo(k) {
+  if (!S.events.length) return;
+  k = Math.max(0, Math.min(S.events.length - 1, k));
+  const ev = S.events[k];
+  const dir = k < S.cursor ? "back" : "fwd";
+  const changed = k !== S.cursor || S.replayT !== ev.t || S.frameIndex !== ev.frameIndex;
+  S.cursor = k;
+  S.lastDir = dir;
+  S.replayT = ev.t;
+  S.frameIndex = ev.frameIndex;
   renderFrame();
-  // inspector regression: rebuild if still visible, clear if removed
+  // inspector regression: rebuild if still visible, clear if the record left the stage
   if (S.selected && S.panelMode === "node") {
     const sel = S.selected;
-    if (next.nodes.some((n) => n.id === sel)) {
-      openPanel("node", sel); // rebuild - stale/status may differ in the new frame
+    const frame = getFrame(S.data, S.frameIndex);
+    const node = findNode(frame, sel);
+    if (node && (S.replayT == null || (eventTime(node) ?? Infinity) <= S.replayT)) {
+      openPanel("node", sel);
     } else {
       closePanel();
     }
   }
   applyFocusClasses();
+  updateDeck();
+  updateClock(ev);
+  updateLowerThird(ev);
+  updateEpoch();
+  renderWatchers();
+  // signature moments
+  if (!rm && changed && S.playing) {
+    if (ev.kind === "call-locked" && ev.nodeId?.startsWith("experiment:")) lockPulse();
+    if (ev.kind === "reality") realityFlash();
+  }
+}
+
+// a chapter stop (the 7-stop rail) parks on the last event of that frame
+function setFrame(i) {
+  cursorTo(lastEventOfFrame(S.events, i));
+}
+
+function lockPulse() {
+  const bf = document.querySelector(".booth-frame");
+  if (!bf) return;
+  bf.classList.remove("lock-hit");
+  void bf.offsetWidth;
+  bf.classList.add("lock-hit");
+  setTimeout(() => bf.classList.remove("lock-hit"), 900);
+}
+
+function realityFlash() {
+  const fw = document.querySelector(".fieldwrap");
+  if (!fw) return;
+  fw.classList.remove("reality-flash");
+  void fw.offsetWidth;
+  fw.classList.add("reality-flash");
+  setTimeout(() => fw.classList.remove("reality-flash"), 180);
+}
+
+/* ---------- booth clock / lower-third / deck ---------- */
+
+const MONTHS3 = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+function updateClock(ev) {
+  const d = new Date(ev.t);
+  $("clock-day").textContent = `DAY ${String(boothDay(S.events, ev.t)).padStart(3, "0")}`;
+  $("clock-date").textContent = `${MONTHS3[d.getUTCMonth()]} ${String(d.getUTCDate()).padStart(2, "0")} ${d.getUTCFullYear()}`;
+  $("clock-elapsed").textContent = replayElapsed(S.cursor);
+}
+
+function updateLowerThird(ev) {
+  const lt = $("lower-third");
+  lt.textContent = "";
+  const line1 = el("span", "lt-kind", `${C.REPLAY.kinds[ev.kind] ?? ev.kind} · ${ev.title}`);
+  lt.append(line1);
+  if (ev.oneLiner) lt.append(el("span", "lt-one", ev.oneLiner));
+}
+
+function buildTicks() {
+  const strip = $("ticks");
+  strip.textContent = "";
+  for (const e of S.events) {
+    const tk = el("button", `tick tick-${e.stance}` + (e.kind === "chapter-closed" ? " tick-chapter" : ""));
+    tk.type = "button";
+    tk.tabIndex = -1; // redundant with the scrubber; keeps the tab order walkable
+    tk.dataset.idx = String(e.index);
+    tk.title = `${C.REPLAY.kinds[e.kind] ?? e.kind} · ${e.title}`;
+    tk.addEventListener("click", () => { pausePlay(); cursorTo(e.index); });
+    strip.append(tk);
+  }
+  $("evscrub").max = String(S.events.length - 1);
+}
+
+function updateDeck() {
+  $("evscrub").value = String(S.cursor);
+  $("deck-elapsed").textContent = replayElapsed(S.cursor);
+  for (const tk of document.querySelectorAll(".tick")) {
+    tk.classList.toggle("on", Number(tk.dataset.idx) <= S.cursor);
+    tk.classList.toggle("now", Number(tk.dataset.idx) === S.cursor);
+  }
+  $("btn-step-back").disabled = S.cursor <= 0;
+  $("btn-step-fwd").disabled = S.cursor >= S.events.length - 1;
+}
+
+/* ---------- home sections ---------- */
+
+function renderHomeCard() {
+  const frame = getFrame(S.data, 6);
+  const call = frame?.call ?? {};
+  const box = $("home-card");
+  box.textContent = "";
+  box.append(el("p", "kicker hc-kicker", C.HOME.call));
+  const paper = el("div", "home-callcard");
+  paper.append(el("p", "hc-human", C.CALL_CARD.human));
+  paper.append(el("p", "hc-criteria", `${C.CALL_CARD.criteriaTitle} ${C.criteriaShort(call.falsification_criteria, { window: false })}`));
+  paper.append(el("p", "hc-fp", `${C.CALL_CARD.fingerprint} ${fpShort(call.prediction_hash)}`));
+  box.append(paper);
+  box.append(el("p", "hc-lock", `${C.CALL_CARD.lockedLabel(C.humanDate(call.created_at, true))} · ${C.REPLAY.confidence}`));
+}
+
+function renderHomeWhy() {
+  const box = $("home-why");
+  box.textContent = "";
+  const f6 = getFrame(S.data, 6);
+  const st = stateAt(S.events, S.events.length - 1);
+  box.append(el("p", "kicker hc-kicker", C.HOME.why));
+  const nums = el("div", "why-nums");
+  const num = (n, cls, lab) => {
+    const d = el("div", `why-num ${cls}`);
+    d.append(el("span", "why-n", String(n)), el("span", "why-t", lab(String(n)).replace(/^\d+\s*/, "")));
+    nums.append(d);
+  };
+  // labels from copy carry the count; strip the leading numeral since it
+  // renders big beside the words
+  num(st.fit, "num-for", (n) => C.HOME.fit(n));
+  num(st.against, "num-against", (n) => C.HOME.against(n));
+  num(st.unknown, "num-unknown", (n) => C.HOME.unknown(n));
+  box.append(nums);
+  const claim = (f6.nodes ?? []).find((n) => n.kind === "observation" && n.status === "conflict" && n.payload?.value?.explicit_fiction === false);
+  if (claim) {
+    box.append(el("p", "kicker hc-change", C.HOME.changeMind + ":"));
+    box.append(el("p", "hc-change-line", C.humanCaption(claim, f6)));
+  }
+}
+
+// Watcher rows: one per native source node. Layer-1 name is the human title of
+// what the watcher checked; the machine path (its uri) is an Expert-only
+// sub-line. Mission is the uri's fetch-task tail, mechanically humanized.
+function watcherName(src, tgtNodes) {
+  const title = tgtNodes[0] ? C.shortCaption(tgtNodes[0], getFrame(S.data, 6)) : null;
+  const seg = (src.payload?.uri ?? "").replace(/^synthetic:\/\//, "").split("/").filter(Boolean);
+  const tail = seg.slice(-1)[0]?.replace(/[-_:]/g, " ") || src.label || src.id.slice(0, 14);
+  return `Watcher · ${title || tail}`;
+}
+function watcherMission(src) {
+  const seg = (src.payload?.uri ?? "").replace(/^synthetic:\/\//, "").split("/").filter(Boolean);
+  return seg.slice(1).map((s) => s.replace(/[-_:]/g, " ")).join(" · ") || "—";
+}
+function renderWatchers() {
+  const frame = getFrame(S.data, 6);
+  const sec = $("watchers");
+  sec.textContent = "";
+  sec.append(el("p", "kicker sec-kicker", C.WATCHERS.title));
+  sec.append(el("p", "sec-sub", C.WATCHERS.sub));
+  const tgts = new Map();
+  for (const e of frame.edges ?? []) {
+    if (e.rel !== "source") continue;
+    if (!tgts.has(e.src)) tgts.set(e.src, []);
+    tgts.get(e.src).push(e.dst);
+  }
+  const evByNode = new Map(S.events.map((e) => [e.nodeId, e]));
+  const table = el("div", "watcher-table");
+  const head = el("div", "w-row w-head");
+  head.append(el("span", "w-name", ""), ...C.WATCHERS.cols.map((c) => el("span", "", c)));
+  table.append(head);
+  const sources = (frame.nodes ?? []).filter((n) => n.kind === "source")
+    .sort((a, b) => (a.known_at ?? "").localeCompare(b.known_at ?? "") || a.id.localeCompare(b.id));
+  for (const s of sources) {
+    const ids = tgts.get(s.id) ?? [];
+    // Cursor-aware ledger: a watcher can only have checked what the tape has
+    // reached — showing future targets would leak the ending.
+    const tgtNodes = ids.map((id) => findNode(frame, id)).filter(Boolean)
+      .filter((n) => S.cursor >= 0 && (eventTime(n) ?? Infinity) <= (S.replayT ?? -Infinity));
+    const st0 = tgtNodes[0] ? C.stanceOf(tgtNodes[0], frame) : "unknown";
+    const row = el("div", "w-row");
+    const name = el("span", "w-name", watcherName(s, tgtNodes));
+    name.prepend(el("span", `w-chev st-${st0}`, "›"));
+    name.append(el("span", "w-uri", (s.payload?.uri ?? "").replace(/^synthetic:\/\//, "")));
+    row.append(name);
+    row.append(el("span", "w-mission", watcherMission(s)));
+    row.append(el("span", "w-checked", tgtNodes.map((n) => C.humanCaption(n, frame)).join(" + ") || "—"));
+    const found = el("span", "w-found");
+    tgtNodes.forEach((n, i) => {
+      if (i) found.append(document.createTextNode(" + "));
+      const st = C.stanceOf(n, frame);
+      const w = st === "for" ? "fit our thinking" : st === "against" ? "argued against it" : "background";
+      found.append(el("b", `w-stance st-${st}`, w));
+    });
+    row.append(found);
+    const deltas = tgtNodes.map((n) => evByNode.get(n.id)?.delta ?? { fit: 0, against: 0, unknown: 0 });
+    const dsum = deltas.reduce((a, d) => ({ fit: a.fit + d.fit, against: a.against + d.against, unknown: a.unknown + d.unknown }), { fit: 0, against: 0, unknown: 0 });
+    const parts = [];
+    if (dsum.fit) parts.push(`+${dsum.fit} fit`);
+    if (dsum.against) parts.push(`+${dsum.against} against`);
+    if (dsum.unknown) parts.push(`+${dsum.unknown} unknown`);
+    row.append(el("span", "w-changed", parts.join(" · ") || "—"));
+    const hash = (s.payload?.sha256 ?? "");
+    row.append(el("span", "w-receipt", hash.slice(0, 12)));
+    table.append(row);
+  }
+  sec.append(table);
+}
+
+function updateEpoch() {
+  const sec = $("epoch");
+  if (!sec) return;
+  const st = epochStats(S.events, S.cursor);
+  sec.textContent = "";
+  sec.append(el("p", "kicker sec-kicker", `${C.EPOCH.title} — chapter ${st?.chapter ?? "—"}`));
+  sec.append(el("p", "sec-sub", C.EPOCH.sub));
+  if (!st) return;
+  const grid = el("div", "epoch-grid");
+  const cell = (k, v) => { const d = el("div", "epoch-cell"); d.append(el("span", "epoch-v", String(v)), el("span", "epoch-k", k)); grid.append(d); };
+  cell("calls made", st.callsMade);
+  cell("resolved", st.resolved);
+  cell("hits", st.hits);
+  cell("misses", st.misses);
+  cell("waiting", st.waiting);
+  sec.append(grid);
+  const rows = el("div", "epoch-lines");
+  rows.append(el("p", "epoch-line", `Biggest contradiction: ${st.contradiction ?? "none in this window"}`));
+  rows.append(el("p", "epoch-line", `Assumption retired: ${st.theoryRetired ? "theory v1 → v2" : "none in this window"}`));
+  rows.append(el("p", "epoch-line", `fees / costs: ${C.EPOCH.notTracked}`));
+  sec.append(rows);
+}
+
+function renderGlass() {
+  const sec = $("glassbox");
+  sec.textContent = "";
+  const head = el("div", "glass-head");
+  head.append(el("p", "kicker sec-kicker", C.GLASS.title.toUpperCase()));
+  head.append(el("span", "glass-badge", C.GLASS.badge));
+  sec.append(head);
+  // the constitution's split is drawn as four bars (55/25/10/10 from the draft
+  // policy); labels only — no amounts ever appear as text
+  const bars = el("div", "glass-bars");
+  for (const [label, share] of [["Nate", 55], ["product & intelligence", 25], ["verified contributors", 10], ["reserve", 10]]) {
+    const b = el("div", "glass-bar");
+    b.style.flex = `${share} 1 0`;
+    b.append(el("div", "glass-fill"), el("span", "glass-bar-label", label));
+    bars.append(b);
+  }
+  sec.append(bars);
+  sec.append(el("p", "glass-qa", `${C.GLASS.q} ${C.GLASS.a}`));
+  const rows = el("div", "glass-rows");
+  for (const lab of ["model/Jev costs", "Watcher costs", "evidence costs", "wallet labels", "policy changes"]) {
+    const r = el("div", "glass-row");
+    r.append(el("span", "", lab), el("span", "glass-none", C.GLASS.none));
+    rows.append(r);
+  }
+  sec.append(rows);
+  sec.append(el("p", "glass-founder", C.GLASS.founder));
+  sec.append(el("p", "glass-footer", C.GLASS.footer));
+}
+
+function renderReceiptSec() {
+  const sec = $("receipt-sec");
+  const frame = getFrame(S.data, S.frameIndex);
+  sec.textContent = "";
+  sec.append(el("p", "kicker sec-kicker", C.RECEIPT.title));
+  sec.append(el("p", "sec-sub", C.RECEIPT.what));
+  const grid = el("div", "receipt-cols");
+  const c1 = el("div", "receipt-col");
+  c1.append(el("p", "receipt-h", C.RECEIPT.provesTitle), el("p", "", C.RECEIPT.proves));
+  const c2 = el("div", "receipt-col");
+  c2.append(el("p", "receipt-h", C.RECEIPT.notTitle));
+  const ul = el("ul", "receipt-not");
+  for (const n of C.RECEIPT.not) ul.append(el("li", "", n));
+  c2.append(ul);
+  grid.append(c1, c2);
+  sec.append(grid);
+  sec.append(el("p", "sec-sub", C.RECEIPT.frameNote(C.humanDate(frame?.as_of, true))));
+  const save = el("button", "btn-pill", C.ACTIONS.saveReceipt);
+  save.type = "button";
+  save.addEventListener("click", downloadReceipt);
+  sec.append(save);
+}
+
+/* ---------- why did it move? panel ---------- */
+
+function renderWhyPanel(body) {
+  const ev = S.events[S.cursor];
+  if (!ev) { closePanel(); return; }
+  body.append(el("p", "i-kicker", C.REPLAY.whyTitle));
+  body.append(el("h2", "i-title", `${C.REPLAY.kinds[ev.kind] ?? ev.kind} · ${ev.title}`));
+  const d = ev.delta;
+  const lines = [];
+  if (d.fit) lines.push(`+${d.fit} that fit our thinking`);
+  if (d.against) lines.push(`+${d.against} that argued against`);
+  if (d.unknown) lines.push(`+${d.unknown} we couldn't know`);
+  if (lines.length) {
+    const ul = el("ul", "i-against");
+    for (const l of lines) ul.append(el("li", "", l));
+    body.append(ul);
+  } else {
+    // no score change: say what was checked (spec section 4)
+    body.append(el("p", "i-body", ev.oneLiner || "Nothing was added to the score."));
+  }
+  body.append(el("span", "i-label", C.REPLAY.plain));
+  if (lines.length) body.append(el("p", "i-body", ev.oneLiner));
+  const st = stateAt(S.events, S.cursor);
+  body.append(el("p", "i-body", `${C.HOME.fit(st.fit)} · ${C.HOME.against(st.against)} · ${C.HOME.unknown(st.unknown)}`));
+}
+
+/* ---------- modes ---------- */
+
+function setMode(m, { pushHash = true } = {}) {
+  if (!["demo", "live", "replay"].includes(m)) m = "demo";
+  S.mode = m;
+  document.body.dataset.mode = m;
+  for (const [id, mm] of [["mode-demo", "demo"], ["mode-live", "live"], ["mode-replay", "replay"]]) {
+    $(id).setAttribute("aria-pressed", String(m === mm));
+  }
+  const state = $("mode-state");
+  if (m === "demo") {
+    state.hidden = true;
+    $("home").hidden = false;
+    renderFrame();
+    updateDeck();
+  } else {
+    pausePlay();
+    $("home").hidden = true;
+    state.hidden = false;
+    $("mode-state-kicker").textContent = m === "live" ? C.MODES.live : C.MODES.replay;
+    $("mode-state-text").textContent = m === "live" ? C.MODES.liveSealed : C.MODES.replayEmpty;
+    // the field shows nothing in sealed/empty modes - no records, no clock
+    for (const id of ["zone-layer", "rails-layer", "edges-layer", "nodes-layer", "annot-layer"]) $(id).textContent = "";
+    $("lower-third").textContent = "";
+  }
+  if (pushHash && location.hash !== `#${m}`) history.replaceState(null, "", `#${m}`);
 }
 
 /* ---------- expert ---------- */
@@ -1263,27 +1701,44 @@ async function main() {
     return;
   }
   S.data = data;
+  S.events = eventsFromWeave(data);
+  S.cursor = S.events.length - 1;
+  S.replayT = S.events[S.cursor]?.t ?? null;
+  S.frameIndex = S.events[S.cursor]?.frameIndex ?? 6;
 
   // static copy
   $("brand-word").textContent = C.BRAND.name;
   $("brand-tag").textContent = C.BRAND.tagline;
   $("badge-example").textContent = C.BRAND.exampleBadge;
   $("hero-q").textContent = C.HERO.question;
-  $("hero-sub").textContent = C.HERO.sub;
+  if ($("hero-sub")) $("hero-sub").textContent = C.HERO.sub; // element dropped from the layout
   $("hero-explainer").textContent = C.HERO.explainer;
   $("hero-truth").textContent = C.HERO.truthLine;
   $("btn-expert").textContent = C.ACTIONS.expertOn;
   $("btn-receipt").textContent = C.ACTIONS.receipt;
   $("btn-share").textContent = C.ACTIONS.share;
-  for (const [id, t] of [["btn-why", C.ACTIONS.why], ["btn-why-hero", C.ACTIONS.why],
-    ["btn-against", C.ACTIONS.against], ["btn-against-hero", C.ACTIONS.against],
-    ["btn-clearfocus", C.ACTIONS.clearFocus], ["btn-clearfocus-hero", C.ACTIONS.clearFocus],
-    ["btn-receipt-hero", C.ACTIONS.receipt], ["btn-share-hero", C.ACTIONS.share]]) {
+  for (const [id, t] of [["btn-why", C.ACTIONS.why],
+    ["btn-against", C.ACTIONS.against],
+    ["btn-clearfocus", C.ACTIONS.clearFocus],
+    ["btn-receipt-hero", C.ACTIONS.receipt]]) {
     $(id).textContent = t;
   }
   $("btn-zoom-reset").textContent = C.MISC.resetView;
   $("inspector-close").textContent = C.ACTIONS.close;
   $("inspector-close").setAttribute("aria-label", C.ACTIONS.close);
+  // replay booth copy
+  $("hero-kicker").textContent = C.HOME.predict;
+  $("mode-demo").textContent = C.MODES.demo;
+  $("mode-live").textContent = C.MODES.live;
+  $("mode-replay").textContent = C.MODES.replay;
+  $("btn-why-move").textContent = C.REPLAY.why;
+  $("btn-whymove-hero").textContent = C.REPLAY.why;
+  $("btn-share-replay").textContent = C.REPLAY.share;
+  $("btn-share-replay-hero").textContent = C.REPLAY.share;
+  $("btn-rewind").title = C.REPLAY.rewind;
+  $("btn-rewind").setAttribute("aria-label", C.REPLAY.rewind);
+  $("btn-rewind-hero").textContent = C.REPLAY.rewind;
+  $("recap-kicker").textContent = C.REPLAY.share;
 
   // scrubber stops
   const stops = $("stops");
@@ -1302,6 +1757,7 @@ async function main() {
     st.addEventListener("click", () => setFrame(i));
     stops.append(st);
   });
+  buildTicks();
 
   const setViewport = () => {
     S.userZoom = false;
@@ -1314,15 +1770,37 @@ async function main() {
   $("cutoff").addEventListener("input", (e) => { pausePlay(); if (S.focus) setFocus(S.focus); setFrame(Number(e.target.value)); });
   $("btn-play").addEventListener("click", togglePlay);
   $("btn-play-hero").addEventListener("click", togglePlay);
-  for (const [id, m] of [["btn-why", "why"], ["btn-why-hero", "why"], ["btn-against", "against"], ["btn-against-hero", "against"]]) {
+  $("evscrub").addEventListener("input", (e) => { pausePlay(); cursorTo(Number(e.target.value)); });
+  for (const id of ["btn-rewind", "btn-rewind-hero"]) {
+    $(id).addEventListener("click", () => { pausePlay(); cursorTo(0); });
+  }
+  $("btn-step-back").addEventListener("click", () => { pausePlay(); cursorTo(S.cursor - 1); });
+  $("btn-step-fwd").addEventListener("click", () => { pausePlay(); cursorTo(S.cursor + 1); });
+  const SPEEDS = [1, 2];
+  $("btn-speed").addEventListener("click", () => {
+    S.speed = SPEEDS[(SPEEDS.indexOf(S.speed) + 1) % SPEEDS.length];
+    $("btn-speed").textContent = `${S.speed}×`;
+    if (S.playing) { pausePlay(); togglePlay(); }
+  });
+  for (const id of ["btn-why-move", "btn-whymove-hero"]) {
+    $(id).addEventListener("click", () => openPanel("why"));
+  }
+  $("btn-share-replay").addEventListener("click", () => openRecapModal());
+  $("btn-share-replay-hero").addEventListener("click", () => openRecapModal());
+  $("recap-close").addEventListener("click", () => { $("recap-modal").hidden = true; });
+  for (const b of document.querySelectorAll(".recap-fmt")) {
+    b.addEventListener("click", () => { openRecapModal(b.dataset.fmt); exportRecap(b.dataset.fmt); });
+  }
+  $("mode-demo").addEventListener("click", () => setMode("demo"));
+  $("mode-live").addEventListener("click", () => setMode("live"));
+  $("mode-replay").addEventListener("click", () => setMode("replay"));
+  for (const [id, m] of [["btn-why", "why"], ["btn-against", "against"]]) {
     $(id).addEventListener("click", () => setFocus(m));
   }
   $("btn-clearfocus").addEventListener("click", () => setFocus(S.focus));
-  $("btn-clearfocus-hero").addEventListener("click", () => setFocus(S.focus));
   $("btn-receipt").addEventListener("click", () => openPanel("receipt"));
   $("btn-receipt-hero").addEventListener("click", () => openPanel("receipt"));
   $("btn-share").addEventListener("click", () => openPanel("share"));
-  $("btn-share-hero").addEventListener("click", () => openPanel("share"));
   $("btn-zoom-reset").addEventListener("click", () => { S.userZoom = false; S.view = { ...S.base }; applyView(); });
   $("btn-expert").addEventListener("click", () => {
     S.expert = !S.expert;
@@ -1336,7 +1814,18 @@ async function main() {
   $("inspector-close").addEventListener("click", closePanel);
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { closePanel(); if (S.focus) setFocus(S.focus); }
+    if (e.key === "Escape") {
+      $("recap-modal").hidden = true;
+      closePanel();
+      if (S.focus) setFocus(S.focus);
+      return;
+    }
+    if (S.mode !== "demo") return;
+    const tag = e.target?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (e.code === "Space" && tag !== "BUTTON") { e.preventDefault(); togglePlay(); }
+    else if (e.key === "ArrowLeft") { pausePlay(); cursorTo(S.cursor - 1); }
+    else if (e.key === "ArrowRight") { pausePlay(); cursorTo(S.cursor + 1); }
   });
 
   // zoom: wheel + pinch (bounded); no pan
@@ -1382,6 +1871,34 @@ async function main() {
 
   applyExpert();
   setViewport();
+
+  // home sections (all derived from the frozen weave / event tape)
+  renderHomeCard();
+  renderHomeWhy();
+  renderWatchers();
+  renderGlass();
+  renderReceiptSec();
+  updateEpoch();
+
+  // deck, clock and lower-third to the resting cursor
+  const ev0 = S.events[S.cursor];
+  updateDeck();
+  updateClock(ev0);
+  updateLowerThird(ev0);
+
+  // deep-linkable modes: #live and #replay render their sealed/empty states
+  const h = location.hash.slice(1);
+  setMode(h === "live" || h === "replay" ? h : "demo", { pushHash: false });
+  addEventListener("hashchange", () => {
+    const m = location.hash.slice(1);
+    setMode(m === "live" || m === "replay" ? m : "demo", { pushHash: false });
+  });
+
+  // verifier hooks (read-mostly; cursorTo/setFrame drive the same code path as UI)
+  window.__mg = {
+    S, events: S.events, cursorTo, setFrame, stateAt, epochStats,
+    recapSVG, exportRecap, openRecapModal, setMode,
+  };
 
   // mobile bottom-sheet offset: sheet sits above the rail
   const setRailH = () => {

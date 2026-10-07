@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MemeGraph — The Living Receipt</title>
+<title>MemeGraph — The Replay Booth</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,73 +12,129 @@
     <span class="brand-word" id="brand-word"></span>
     <span class="brand-tag" id="brand-tag"></span>
   </div>
+  <nav class="modes" id="modes" aria-label="Mode">
+    <button id="mode-demo" type="button" class="mode-pill" aria-pressed="true"></button>
+    <button id="mode-live" type="button" class="mode-pill" aria-pressed="false"></button>
+    <button id="mode-replay" type="button" class="mode-pill" aria-pressed="false"></button>
+  </nav>
   <div class="top-right">
-    <span class="badge-example" id="badge-example"></span>
     <button id="btn-expert" type="button" class="btn-quiet" aria-pressed="false"></button>
   </div>
 </header>
 
-<section class="hero" aria-label="The call this story is about">
-  <div class="hero-left">
-    <h1 class="hero-q" id="hero-q"></h1>
-    <p class="hero-sub" id="hero-sub"></p>
+<div id="mode-state" hidden>
+  <div class="mode-card">
+    <p class="kicker" id="mode-state-kicker"></p>
+    <p class="mode-state-text" id="mode-state-text"></p>
   </div>
-  <div class="hero-right">
-    <p class="hero-explainer" id="hero-explainer"></p>
-    <p class="hero-truth" id="hero-truth"></p>
-  </div>
-  <div class="hero-actions" id="hero-actions">
-    <button id="btn-play-hero" type="button" class="btn-primary"></button>
-    <div class="hero-pills">
-      <button id="btn-why-hero" type="button" class="btn-pill" aria-pressed="false"></button>
-      <button id="btn-against-hero" type="button" class="btn-pill" aria-pressed="false"></button>
-      <button id="btn-clearfocus-hero" type="button" class="btn-pill" hidden></button>
-      <button id="btn-receipt-hero" type="button" class="btn-pill"></button>
-      <button id="btn-share-hero" type="button" class="btn-pill"></button>
-    </div>
-  </div>
-</section>
+</div>
 
-<footer class="rail" id="rail">
-  <div class="rail-row">
-    <div class="rail-left">
-      <button id="btn-play" type="button" class="btn-primary"></button>
-      <button id="btn-why" type="button" class="btn-pill" aria-pressed="false"></button>
-      <button id="btn-against" type="button" class="btn-pill" aria-pressed="false"></button>
-      <button id="btn-clearfocus" type="button" class="btn-pill" hidden></button>
+<main id="home">
+  <section class="hero" aria-label="The call this story is about">
+    <div class="hero-c1">
+      <p class="kicker hero-kicker" id="hero-kicker"></p>
+      <h1 class="hero-q" id="hero-q"></h1>
+      <p class="hero-explainer" id="hero-explainer"></p>
+      <p class="hero-truth" id="hero-truth"></p>
+      <p><span class="badge-example" id="badge-example"></span></p>
     </div>
-    <div class="scrub">
-      <div class="scrub-track">
-        <input id="cutoff" type="range" min="0" max="6" step="1" value="6" aria-label="Move through time">
-        <div class="stops" id="stops" aria-hidden="true"></div>
+    <div class="hero-c2" id="home-card" aria-label="Our call"></div>
+    <div class="hero-c3" id="home-why" aria-label="Why"></div>
+    <div class="hero-actions" id="hero-actions">
+      <button id="btn-play-hero" type="button" class="btn-primary"></button>
+      <div class="hero-pills">
+        <button id="btn-rewind-hero" type="button" class="btn-pill"></button>
+        <button id="btn-whymove-hero" type="button" class="btn-pill"></button>
+        <button id="btn-share-replay-hero" type="button" class="btn-pill"></button>
+        <button id="btn-receipt-hero" type="button" class="btn-pill"></button>
       </div>
     </div>
-    <div class="rail-side">
-      <button id="btn-receipt" type="button" class="btn-quiet"></button>
-      <button id="btn-share" type="button" class="btn-quiet"></button>
-    </div>
-  </div>
-  <p class="now-line" id="now-line"></p>
-</footer>
+  </section>
 
-<main class="fieldwrap">
-  <svg id="graph" viewBox="0 0 1400 620" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Evidence through time: what we knew, the locked call, and what happened">
-    <defs>
-      <pattern id="hatch" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-        <rect width="10" height="10" fill="none"></rect>
-        <line x1="0" y1="0" x2="0" y2="10" stroke="rgba(239,230,210,0.06)" stroke-width="2"></line>
-      </pattern>
-    </defs>
-    <g id="zone-layer"></g>
-    <g id="rails-layer"></g>
-    <g id="edges-layer"></g>
-    <g id="nodes-layer"></g>
-    <g id="annot-layer"></g>
-  </svg>
-  <button id="btn-zoom-reset" type="button" class="btn-quiet zoom-reset" hidden></button>
+  <section id="booth" aria-label="The replay booth">
+    <div class="booth-frame">
+      <div class="booth-head">
+        <div id="booth-clock" class="booth-clock">
+          <span id="clock-day"></span><span class="clock-sep"> · </span><span id="clock-date"></span>
+          <span id="clock-elapsed"></span>
+        </div>
+      </div>
+      <div class="fieldwrap">
+        <svg id="graph" viewBox="0 0 1400 620" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Evidence through time: what we knew, the locked call, and what happened">
+          <defs>
+            <pattern id="hatch" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <rect width="10" height="10" fill="none"></rect>
+              <line x1="0" y1="0" x2="0" y2="10" stroke="rgba(239,230,210,0.06)" stroke-width="2"></line>
+            </pattern>
+          </defs>
+          <g id="zone-layer"></g>
+          <g id="rails-layer"></g>
+          <g id="edges-layer"></g>
+          <g id="nodes-layer"></g>
+          <g id="annot-layer"></g>
+        </svg>
+        <button id="btn-zoom-reset" type="button" class="btn-quiet zoom-reset" hidden></button>
+      </div>
+      <div id="lower-third" class="lower-third" aria-live="polite"></div>
+      <div id="deck" class="deck" aria-label="Replay deck">
+        <button id="btn-play" type="button" class="btn-deck-play"></button>
+        <button id="btn-rewind" type="button" class="btn-quiet" aria-label="Rewind">⏮</button>
+        <button id="btn-step-back" type="button" class="btn-quiet" aria-label="Step back">◀</button>
+        <button id="btn-step-fwd" type="button" class="btn-quiet" aria-label="Step forward">▶</button>
+        <div class="deck-strip">
+          <div class="ticks" id="ticks" aria-hidden="true"></div>
+          <input id="evscrub" type="range" min="0" step="1" value="0" aria-label="Replay position">
+        </div>
+        <button id="btn-speed" type="button" class="btn-quiet">1×</button>
+        <button id="btn-why-move" type="button" class="btn-pill"></button>
+        <button id="btn-share-replay" type="button" class="btn-pill"></button>
+        <span id="deck-elapsed" class="deck-elapsed">00:00</span>
+      </div>
+    </div>
+  </section>
+
+  <footer class="rail" id="rail" aria-label="Chapters">
+    <div class="rail-row">
+      <div class="rail-left">
+        <button id="btn-why" type="button" class="btn-pill" aria-pressed="false"></button>
+        <button id="btn-against" type="button" class="btn-pill" aria-pressed="false"></button>
+        <button id="btn-clearfocus" type="button" class="btn-pill" hidden></button>
+      </div>
+      <div class="scrub">
+        <div class="scrub-track">
+          <input id="cutoff" type="range" min="0" max="6" step="1" value="6" aria-label="Move through time">
+          <div class="stops" id="stops" aria-hidden="true"></div>
+        </div>
+      </div>
+      <div class="rail-side">
+        <button id="btn-receipt" type="button" class="btn-quiet"></button>
+        <button id="btn-share" type="button" class="btn-quiet"></button>
+      </div>
+    </div>
+    <p class="now-line" id="now-line"></p>
+  </footer>
+
+  <section id="chapters" class="chapters" aria-label="What happened"></section>
+  <section id="watchers" class="section watchers" aria-label="Watchers"></section>
+  <section id="epoch" class="section epoch" aria-label="This chapter"></section>
+  <section id="glassbox" class="section glass" aria-label="How the money works"></section>
+  <section id="receipt-sec" class="section receipt-sec" aria-label="The receipt"></section>
 </main>
 
-<section id="chapters" class="chapters" aria-hidden="true"></section>
+<div id="recap-modal" class="recap-modal" hidden role="dialog" aria-modal="true" aria-label="Share this replay">
+  <div class="recap-sheet">
+    <div class="recap-head">
+      <p class="kicker" id="recap-kicker"></p>
+      <button id="recap-close" type="button" class="btn-quiet panel-close" aria-label="Close">×</button>
+    </div>
+    <div id="recap-preview" class="recap-preview"></div>
+    <div class="recap-fmts">
+      <button type="button" class="btn-pill recap-fmt" data-fmt="9x16" aria-pressed="true">9:16</button>
+      <button type="button" class="btn-pill recap-fmt" data-fmt="1x1" aria-pressed="false">1:1</button>
+      <button type="button" class="btn-pill recap-fmt" data-fmt="16x9" aria-pressed="false">16:9</button>
+    </div>
+  </div>
+</div>
 
 <aside id="inspector" class="panel" hidden aria-label="Details">
   <div class="panel-grip" aria-hidden="true"></div>
@@ -88,7 +144,7 @@
 
 <noscript>
   <p style="padding: 40px; font-family: sans-serif;">
-    The living receipt renders the frozen evidence weave and needs JavaScript.
+    The replay booth renders the frozen evidence weave and needs JavaScript.
     Without it, nothing is shown rather than guessed.
   </p>
 </noscript>
