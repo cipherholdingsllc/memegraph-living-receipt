@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MemeGraph — The Living Receipt</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand" data-brand>
+    <span class="brand-word" id="brand-word"></span>
+    <span class="brand-tag" id="brand-tag"></span>
+  </div>
+  <div class="top-right">
+    <span class="badge-example" id="badge-example"></span>
+    <button id="btn-expert" type="button" class="btn-quiet" aria-pressed="false"></button>
+  </div>
+</header>
+
+<section class="hero" aria-label="The call this story is about">
+  <div class="hero-left">
+    <h1 class="hero-q" id="hero-q"></h1>
+    <p class="hero-sub" id="hero-sub"></p>
+  </div>
+  <div class="hero-right">
+    <p class="hero-explainer" id="hero-explainer"></p>
+    <p class="hero-truth" id="hero-truth"></p>
+  </div>
+  <div class="hero-actions" id="hero-actions">
+    <button id="btn-play-hero" type="button" class="btn-primary"></button>
+    <div class="hero-pills">
+      <button id="btn-why-hero" type="button" class="btn-pill" aria-pressed="false"></button>
+      <button id="btn-against-hero" type="button" class="btn-pill" aria-pressed="false"></button>
+      <button id="btn-clearfocus-hero" type="button" class="btn-pill" hidden></button>
+      <button id="btn-receipt-hero" type="button" class="btn-pill"></button>
+      <button id="btn-share-hero" type="button" class="btn-pill"></button>
+    </div>
+  </div>
+</section>
+
+<footer class="rail" id="rail">
+  <div class="rail-row">
+    <div class="rail-left">
+      <button id="btn-play" type="button" class="btn-primary"></button>
+      <button id="btn-why" type="button" class="btn-pill" aria-pressed="false"></button>
+      <button id="btn-against" type="button" class="btn-pill" aria-pressed="false"></button>
+      <button id="btn-clearfocus" type="button" class="btn-pill" hidden></button>
+    </div>
+    <div class="scrub">
+      <div class="scrub-track">
+        <input id="cutoff" type="range" min="0" max="6" step="1" value="6" aria-label="Move through time">
+        <div class="stops" id="stops" aria-hidden="true"></div>
+      </div>
+    </div>
+    <div class="rail-side">
+      <button id="btn-receipt" type="button" class="btn-quiet"></button>
+      <button id="btn-share" type="button" class="btn-quiet"></button>
+    </div>
+  </div>
+  <p class="now-line" id="now-line"></p>
+</footer>
+
+<main class="fieldwrap">
+  <svg id="graph" viewBox="0 0 1400 620" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Evidence through time: what we knew, the locked call, and what happened">
+    <defs>
+      <pattern id="hatch" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <rect width="10" height="10" fill="none"></rect>
+        <line x1="0" y1="0" x2="0" y2="10" stroke="rgba(239,230,210,0.06)" stroke-width="2"></line>
+      </pattern>
+    </defs>
+    <g id="zone-layer"></g>
+    <g id="rails-layer"></g>
+    <g id="edges-layer"></g>
+    <g id="nodes-layer"></g>
+    <g id="annot-layer"></g>
+  </svg>
+  <button id="btn-zoom-reset" type="button" class="btn-quiet zoom-reset" hidden></button>
+</main>
+
+<section id="chapters" class="chapters" aria-hidden="true"></section>
+
+<aside id="inspector" class="panel" hidden aria-label="Details">
+  <div class="panel-grip" aria-hidden="true"></div>
+  <button id="inspector-close" type="button" class="btn-quiet panel-close"></button>
+  <div id="inspect-body"></div>
+</aside>
+
+<noscript>
+  <p style="padding: 40px; font-family: sans-serif;">
+    The living receipt renders the frozen evidence weave and needs JavaScript.
+    Without it, nothing is shown rather than guessed.
+  </p>
+</noscript>
+
+<script type="module" src="app.mjs"></script>
+</body>
+</html>
